@@ -507,11 +507,9 @@ __read_swap_cache_async_profiling(swp_entry_t entry, gfp_t gfp_mask,
 	__SetPageLocked(page);
 	__SetPageSwapBacked(page);
 
-	adc_pf_breakdown_end(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
 	if (mem_cgroup_swapin_charge_page_profiling(page, NULL, gfp_mask, entry,
 						    adc_pf_bits, pf_breakdown))
 		goto fail_unlock_profiling;
-	adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_IO, get_cycles_start());
 
 	/* May fail (-ENOMEM) if XArray node allocation failed. */
 	if (add_to_swap_cache(page, entry, gfp_mask & GFP_RECLAIM_MASK, &shadow))
@@ -530,7 +528,6 @@ __read_swap_cache_async_profiling(swp_entry_t entry, gfp_t gfp_mask,
 
 // [RMGrid] profiling
 fail_unlock_profiling:
-	adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_IO, get_cycles_start());
 fail_unlock:
 	put_swap_page(page, entry);
 	unlock_page(page);
@@ -683,7 +680,9 @@ struct page *swap_cluster_readahead_profiling(swp_entry_t entry, gfp_t gfp_mask,
 						  adc_pf_bits, pf_breakdown);
 	if (demand_page_allocated) {
 		cpu = get_cpu();
+		adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
 		swap_readpage(fault_page, do_poll);
+		adc_pf_breakdown_end(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
 		put_cpu();
 		// [RMGrid] profiling
 		set_adc_pf_bits(adc_pf_bits, ADC_PF_MAJOR_BIT);
@@ -741,8 +740,9 @@ skip:
 	if (demand_page_allocated) {
 		adc_pf_breakdown_stt(pf_breakdown, ADC_POLL_LOAD,
 				     get_cycles_start());
-		//printk("[debug] : swapin cluster cpu %d",cpu);
+		adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
 		frontswap_poll_load(cpu);
+		adc_pf_breakdown_end(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
 		adc_pf_breakdown_end(pf_breakdown, ADC_POLL_LOAD,
 				     get_cycles_end());
 	}
@@ -913,7 +913,9 @@ static struct page *swap_vma_readahead_profiling(swp_entry_t fentry,
 	adc_pf_breakdown_end(pf_breakdown, ADC_DEDUP_SWAPIN, get_cycles_end());
 	if (demand_page_allocated) {
 		cpu = get_cpu();
+		adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
 		swap_readpage(fault_page, ra_info.win == 1);
+		adc_pf_breakdown_end(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
 		put_cpu();
 		// [RMGrid] profiling
 		set_adc_pf_bits(adc_pf_bits, ADC_PF_MAJOR_BIT);
@@ -961,8 +963,9 @@ skip:
 	if (demand_page_allocated) {
 		adc_pf_breakdown_stt(pf_breakdown, ADC_POLL_LOAD,
 				     get_cycles_start());
-		//printk("[debug] : swapin vma cpu %d",cpu);
+		adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
 		frontswap_poll_load(cpu);
+		adc_pf_breakdown_end(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
 		adc_pf_breakdown_end(pf_breakdown, ADC_POLL_LOAD,
 				     get_cycles_end());
 	}
@@ -1050,8 +1053,6 @@ vm_fault_t swapin_bypass_swapcache(struct page **pagep,
 	
 	if (!page) {
 		//printk("[debug] : swapin bypass swapcache alloc fail");
-		// adc_pf_breakdown_end(pf_breakdown, ADC_PAGE_IO,
-		// 		     get_cycles_end());
 		goto oom;
 	}
 	
@@ -1073,7 +1074,9 @@ vm_fault_t swapin_bypass_swapcache(struct page **pagep,
 	*cpu = get_cpu();
 	/* To provide entry to swap_readpage() */
 	set_page_private(page, entry.val);
+        adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
 	swap_readpage(page, true);
+	adc_pf_breakdown_end(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
 	//set_page_private(page, 0);
 	// frontswap_poll_load(cpu); do poll later
 	put_cpu();
@@ -1134,12 +1137,10 @@ vm_fault_t swapin_bypass_swapcache(struct page **pagep,
 
 done:
 	adc_pf_breakdown_end(pf_breakdown, ADC_PREFETCH, get_cycles_end());
-	//printk("[debug] : add to lru page 0x%lx", *pagep);
 	lru_cache_add(*pagep);
 	return 0;
 oom:
 	//lazy poll can't get specific io time
-	// adc_pf_breakdown_end(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
 	return VM_FAULT_OOM;
 }
 #ifdef CONFIG_SYSFS

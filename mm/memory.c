@@ -3817,13 +3817,9 @@ vm_fault_t do_swap_page_profiling(struct vm_fault *vmf, int *adc_pf_bits,
 		}
 	}
 	if (!page) {
-		pf_ts = get_cycles_start();
-		adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_IO, pf_ts);
 		if (__swap_count(entry) == 1) {
 			/* skip swapcache */
 			vm_fault_t func_ret = 0;
-			// adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_IO,
-			// 		     get_cycles_start());
 			func_ret = swapin_bypass_swapcache(
 				&page, vmf, entry, &cpu, adc_pf_bits,
 				pf_breakdown);
@@ -3841,9 +3837,8 @@ vm_fault_t do_swap_page_profiling(struct vm_fault *vmf, int *adc_pf_bits,
 							  pf_breakdown);
 			swapcache = page;
 		}
-		pf_ts = get_cycles_end();
-		adc_pf_breakdown_end(pf_breakdown, ADC_PAGE_IO, pf_ts);
 
+		pf_ts = get_cycles_end();
 		if (!page) {
 			/*
 			 * Back out if somebody else faulted in this pte
@@ -3910,7 +3905,11 @@ vm_fault_t do_swap_page_profiling(struct vm_fault *vmf, int *adc_pf_bits,
 	}
 
 	if(cpu != -1){
+		pf_ts = get_cycles_end();
+                adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_IO, pf_ts);
 		frontswap_poll_load(cpu);
+		pf_ts = get_cycles_end();
+                adc_pf_breakdown_end(pf_breakdown, ADC_PAGE_IO, pf_ts);
 		cpu = -1;
 		//locked = trylock_page(page);
 		//if (!locked) {

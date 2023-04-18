@@ -1358,17 +1358,11 @@ static inline int post_pageout_rls_pages(
 
 		if (page_has_private(page)) {
 			if (!try_to_release_page(page, sc->gfp_mask)) {
-				adc_pf_breakdown_end(pf_breakdown,
-						     ADC_RLS_PG_RM_MAP,
-						     get_cycles_end());
 				goto activate_locked;
 			}
 			if (!mapping && page_count(page) == 1) {
 				unlock_page(page);
 				if (put_page_testzero(page)) {
-					adc_pf_breakdown_end(pf_breakdown,
-							     ADC_RLS_PG_RM_MAP,
-							     get_cycles_end());
 					goto free_it;
 				} else {
 					/*
@@ -1379,9 +1373,6 @@ static inline int post_pageout_rls_pages(
 					 * leave it off the LRU).
 					 */
 					nr_reclaimed++;
-					adc_pf_breakdown_end(pf_breakdown,
-							     ADC_RLS_PG_RM_MAP,
-							     get_cycles_end());
 					continue;
 				}
 			}
@@ -1390,16 +1381,10 @@ static inline int post_pageout_rls_pages(
 		if (PageAnon(page) && !PageSwapBacked(page)) {
 			/* follow __remove_mapping for reference */
 			if (!page_ref_freeze(page, 1)) {
-				adc_pf_breakdown_end(pf_breakdown,
-						     ADC_RLS_PG_RM_MAP,
-						     get_cycles_end());
 				goto keep_locked;
 			}
 			if (PageDirty(page)) {
 				page_ref_unfreeze(page, 1);
-				adc_pf_breakdown_end(pf_breakdown,
-						     ADC_RLS_PG_RM_MAP,
-						     get_cycles_end());
 				goto keep_locked;
 			}
 
@@ -1407,15 +1392,11 @@ static inline int post_pageout_rls_pages(
 			count_memcg_page_event(page, PGLAZYFREED);
 		} else if (!mapping || !__remove_mapping(mapping, page, true,
 							 sc->target_mem_cgroup)) {
-			adc_pf_breakdown_end(pf_breakdown, ADC_RLS_PG_RM_MAP,
-					     get_cycles_end());
 			goto keep_locked;
 		}
 
 		unlock_page(page);
 
-		adc_pf_breakdown_end(pf_breakdown, ADC_RLS_PG_RM_MAP,
-				     get_cycles_end());
 
 free_it:
 		/*
@@ -1555,7 +1536,7 @@ batched_pageout(struct list_head *page_list, struct list_head *clean_pages,
 				/*
 				 * A synchronous write - probably a ramdisk.  Go
 				 * ahead and try to reclaim the page.
-				 */
+			 */
 				if (!trylock_page(page)) {
 					VM_BUG_ON_PAGE(
 						PageLRU(page) ||

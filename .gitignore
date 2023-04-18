@@ -170,3 +170,6 @@ sphinx_*/
 .cache
 __pycache__
 *.pyc
+
+modules-only.symvers
+vmlinux.map
