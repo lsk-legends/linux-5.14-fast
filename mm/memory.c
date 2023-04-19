@@ -3510,7 +3510,7 @@ vm_fault_t do_writeback_page(struct vm_fault *vmf)
 	vm_fault_t ret = 0;
 	VM_BUG_ON_PAGE(!PageSwapClean(page), page);
 
-	count_memcg_event_mm(vma->vm_mm, WRITEBACK_FAULT);
+	//count_memcg_event_mm(vma->vm_mm, WRITEBACK_FAULT);
 
 	writeback_entry = pte_to_swp_entry(vmf->orig_pte);
 	page = writeback_entry_to_page(writeback_entry);

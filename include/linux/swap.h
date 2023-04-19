@@ -107,8 +107,8 @@ static inline int current_is_kswapd(void)
 #endif
 
 //shengkai: add difference of writeback_num
-// #define MAX_SWAPFILES \
-// 	((1 << MAX_SWAPFILES_SHIFT) - SWP_DEVICE_NUM - \
+// #define MAX_SWAPFILES 
+// 	((1 << MAX_SWAPFILES_SHIFT) - SWP_DEVICE_NUM - 
 // 	SWP_MIGRATION_NUM - SWP_HWPOISON_NUM)
 #define MAX_SWAPFILES \
 	((1 << MAX_SWAPFILES_SHIFT) - SWP_DEVICE_NUM - \
