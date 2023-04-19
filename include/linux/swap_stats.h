@@ -299,6 +299,7 @@ static inline void record_spf_lat(uint64_t pf_breakdown[])
 extern bool fs_enabled; // control flag to enable fastswap's offloading
 extern bool fs_hardlimit; // control flag to restrict memory usage under the hard limit
 extern unsigned fs_headroom; // for offloaded reclamation, counted in #(pages)
+extern unsigned fs_wbroom; // for early writeback, counted in #(pages)
 extern unsigned fs_nr_cores; // dedicated cores for offloaded reclamation
 extern unsigned fs_cores[]; // id of dedicated cores are used
 

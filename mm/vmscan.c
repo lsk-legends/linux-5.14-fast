@@ -1793,7 +1793,16 @@ shrink_page_list_profiling(struct list_head *page_list,
 		 * Lazyfree page could be freed directly
 		 */
 		if (PageAnon(page) && PageSwapBacked(page)) {
-			if (!PageSwapCache(page)) {
+			//shengkai: add ealy writeback support
+			if (PageSwapClean(page)) {
+				/* already added to swap cache when unset*/
+				// ClearPageSwapClean(page);
+				SetPageSwapCache(page);
+				if (sc->target_mem_cgroup)
+					count_memcg_events(sc->target_mem_cgroup, RECLAIM_CLEANON, 1);
+				may_enter_fs = true;
+				mapping = page_mapping(page);
+			} else if (!PageSwapCache(page)) {
 				if (!(sc->gfp_mask & __GFP_IO))
 					goto keep_locked;
 				if (page_maybe_dma_pinned(page))
@@ -1877,6 +1886,12 @@ shrink_page_list_profiling(struct list_head *page_list,
 		}
 		adc_pf_breakdown_end(pf_breakdown, ADC_TRY_TO_UNMAP,
 				     get_cycles_end());
+
+		//shengkai: add ealy writeback support
+		if (PageSwapClean(page)) {
+			ClearPageSwapClean(page);
+			atomic_long_dec(&(page_memcg(page)->clean_anon));
+		}
 
 		if (PageDirty(page)) {
 			/*

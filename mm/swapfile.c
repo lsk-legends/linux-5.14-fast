@@ -1709,6 +1709,29 @@ bool reuse_swap_page(struct page *page, int *total_map_swapcount)
 	return count <= 1;
 }
 
+//shengkai: add ealy writeback support
+bool reuse_writeback_page(struct page *page)
+{
+	int mapcount, swapcount;
+
+	VM_BUG_ON_PAGE((!PageLocked(page) || !PageSwapClean(page)), page);
+	if (unlikely(PageKsm(page)))
+		return false;
+	/* 0 means only mapped by one proc */
+	mapcount = atomic_read(&page->_mapcount);
+	if (mapcount > 0)
+		return false;
+
+	swapcount = page_swapcount(page);
+	if (swapcount == 1 && PageSwapClean(page)) {
+		delete_from_swap_cache(page);
+		ClearPageSwapClean(page);
+		SetPageDirty(page);
+		atomic_long_dec(&(page_memcg(page)->clean_anon));
+	}
+
+	return swapcount <= 1;
+}
 /*
  * If swap is getting full, or if there are no more mappings of this page,
  * then try_to_free_swap is called to free its swap space.
@@ -1745,6 +1768,26 @@ int try_to_free_swap(struct page *page)
 	page = compound_head(page);
 	delete_from_swap_cache(page);
 	SetPageDirty(page);
+	return 1;
+}
+
+//shengkai: add ealy writeback support
+int try_to_free_swapclean(struct page *page)
+{
+	VM_BUG_ON_PAGE(!PageLocked(page), page);
+
+	if (!PageSwapClean(page))
+		return 0;
+	if (PageWriteback(page))
+		return 0;
+	if (page_swapped(page))
+		return 0;
+
+	page = compound_head(page);
+	delete_from_swap_cache(page);
+	ClearPageSwapClean(page);
+	SetPageDirty(page);
+	atomic_long_dec(&(page_memcg(page)->clean_anon));
 	return 1;
 }
 

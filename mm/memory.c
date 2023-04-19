@@ -1363,6 +1363,15 @@ again:
 				    likely(!(vma->vm_flags & VM_SEQ_READ)))
 					mark_page_accessed(page);
 			}
+			//shengkai: add ealy writeback support
+			if (PageSwapClean(page)) {
+				swp_entry_t swp_entry = { .val = page_private(page) };
+				SetPageSwapCache(page);
+				free_swap_and_cache(swp_entry);
+				ClearPageSwapClean(page);
+				rss[MM_SWAPENTS]--;
+				atomic_long_dec(&(page_memcg(page)->clean_anon));
+			}
 			rss[mm_counter(page)]--;
 			page_remove_rmap(page, false);
 			if (unlikely(page_mapcount(page) < 0))
@@ -1398,6 +1407,23 @@ again:
 				page_remove_rmap(page, false);
 
 			put_page(page);
+			continue;
+		}
+
+		//shengkai: add ealy writeback support
+		if (is_writeback_entry(entry)) {
+			struct page* page = writeback_entry_to_page(entry);
+			swp_entry_t swp_entry = { .val = page_private(page) };
+			VM_BUG_ON_PAGE(!PageSwapClean(page), page);
+
+			rss[MM_SWAPENTS]--;
+			rss[MM_ANONPAGES]--;
+			pte_clear_not_present_full(mm, addr, pte, tlb->fullmm);
+			SetPageSwapCache(page);
+			free_swap_and_cache(swp_entry);
+			ClearPageSwapClean(page);
+			page_remove_rmap(page, false);
+			atomic_long_dec(&(page_memcg(page)->clean_anon));
 			continue;
 		}
 
@@ -3472,7 +3498,74 @@ static vm_fault_t remove_device_exclusive_entry(struct vm_fault *vmf)
 	return 0;
 }
 
-/* shengkai:
+//shengkai: add ealy writeback support
+vm_fault_t do_writeback_page(struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma = vmf->vma;
+	struct page *page = NULL;
+	swp_entry_t writeback_entry, swp_entry;
+	pte_t pte;
+	int locked;
+	int exclusive = 0;
+	vm_fault_t ret = 0;
+	VM_BUG_ON_PAGE(!PageSwapClean(page), page);
+
+	count_memcg_event_mm(vma->vm_mm, WRITEBACK_FAULT);
+
+	writeback_entry = pte_to_swp_entry(vmf->orig_pte);
+	page = writeback_entry_to_page(writeback_entry);
+	swp_entry.val = page_private(page);
+	locked = lock_page_or_retry(page, vma->vm_mm, vmf->flags);
+	if (!locked) {
+		ret |= VM_FAULT_RETRY;
+		goto out;
+	}
+
+	vmf->pte = pte_offset_map_lock(vma->vm_mm, vmf->pmd, vmf->address,
+			&vmf->ptl);
+	if (unlikely(!pte_same(*vmf->pte, vmf->orig_pte)))
+		goto out_nomap;
+
+	pte = pfn_pte(writeback_entry_to_pfn(writeback_entry), vma->vm_page_prot);
+	if ((vmf->flags & FAULT_FLAG_WRITE) && reuse_writeback_page(page)) {
+		pte = maybe_mkwrite(pte_mkdirty(pte), vma);
+		vmf->flags &= ~FAULT_FLAG_WRITE;
+		ret |= VM_FAULT_WRITE;
+		exclusive = RMAP_EXCLUSIVE;
+	}
+	if (pte_swp_soft_dirty(vmf->orig_pte))
+		pte = pte_mksoft_dirty(pte);
+	if (pte_swp_uffd_wp(vmf->orig_pte)) {
+		pte = pte_mkuffd_wp(pte);
+		pte = pte_wrprotect(pte);
+	}
+	set_pte_at(vma->vm_mm, vmf->address, vmf->pte, pte);
+	vmf->orig_pte = pte;
+	
+	dec_mm_counter_fast(vma->vm_mm, MM_SWAPENTS);
+	swap_free(swp_entry);
+	try_to_free_swapclean(page);
+	unlock_page(page);
+
+	if (vmf->flags & FAULT_FLAG_WRITE) {
+		printk("do_wp\n");
+		ret |= do_wp_page(vmf);
+		if (ret & VM_FAULT_ERROR)
+			ret &= VM_FAULT_ERROR;
+		goto out;
+	}
+
+	update_mmu_cache(vma, vmf->address, vmf->pte);
+	pte_unmap_unlock(vmf->pte, vmf->ptl);
+out:
+	return ret;
+out_nomap:
+	pte_unmap_unlock(vmf->pte, vmf->ptl);
+	unlock_page(page);
+	return ret;
+}
+
+/* shengkai: disabled because high cost of lookup swapcache
  *  swapin_map_pte - try map pages prefetched, called by rswap callback func
  *  changed from do_swap_page(),how to do link? 
  *  use utils to make rswap refer to swapin_map_pte?
@@ -3784,7 +3877,9 @@ vm_fault_t do_swap_page_profiling(struct vm_fault *vmf, int *adc_pf_bits,
 			ret = vmf->page->pgmap->ops->migrate_to_ram(vmf);
 		} else if (is_hwpoison_entry(entry)) {
 			ret = VM_FAULT_HWPOISON;
-		} else {
+		} else if (is_writeback_entry(entry)) {//shengkai: add ealy writeback support
+			ret = do_writeback_page(vmf);
+ 		} else {
 			print_bad_pte(vma, vmf->address, vmf->orig_pte, NULL);
 			ret = VM_FAULT_SIGBUS;
 		}

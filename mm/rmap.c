@@ -1496,6 +1496,33 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 			}
 		}
 
+		//shengkai: add ealy writeback support
+		if (is_swap_pte(*pvmw.pte)) {
+			swp_entry_t entry;
+			pte_t swp_pte;
+			pteval = ptep_get_and_clear(mm, pvmw.address, pvmw.pte);
+			entry = pte_to_swp_entry(pteval);
+			if (!is_writeback_entry(entry)) {
+				set_pte_at(mm, address, pvmw.pte, pteval);
+				ret = false;
+				page_vma_mapped_walk_done(&pvmw);
+				break;
+			}
+			dec_mm_counter(mm, MM_ANONPAGES);
+			entry.val = page_private(page);
+			swp_pte = swp_entry_to_pte(entry);
+			if (pte_swp_soft_dirty(pteval))
+				swp_pte = pte_swp_mksoft_dirty(swp_pte);
+			if (pte_swp_uffd_wp(pteval))
+				swp_pte = pte_swp_mkuffd_wp(swp_pte);
+			set_pte_at(mm, address, pvmw.pte, swp_pte);
+			/* Invalidate as we cleared the pte */
+			mmu_notifier_invalidate_range(mm, address,
+						      address + PAGE_SIZE);
+			subpage = page;
+			goto discard;
+		}
+
 		/* Nuke the page table entry. */
 		flush_cache_page(vma, address, pte_pfn(*pvmw.pte));
 		if (should_defer_flush(mm, flags)) {
@@ -1551,6 +1578,20 @@ static bool try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 		} else if (PageAnon(page)) {
 			swp_entry_t entry = { .val = page_private(subpage) };
 			pte_t swp_pte;
+			//shengkai: add ealy writeback support
+			if (PageSwapClean(page)) {
+				pr_err("BUG: shouln't be psc\n");
+				dec_mm_counter(mm, MM_ANONPAGES);
+				swp_pte = swp_entry_to_pte(entry);
+				if (pte_soft_dirty(pteval))
+					swp_pte = pte_swp_mksoft_dirty(swp_pte);
+				if (pte_uffd_wp(pteval))
+					swp_pte = pte_swp_mkuffd_wp(swp_pte);
+				set_pte_at(mm, address, pvmw.pte, swp_pte);
+				mmu_notifier_invalidate_range(mm, address,
+								address + PAGE_SIZE);
+				goto discard;
+			}
 			/*
 			 * Store the swap location in the pte.
 			 * See handle_pte_fault() ...
@@ -1679,6 +1720,132 @@ void try_to_unmap(struct page *page, enum ttu_flags flags)
 		rmap_walk_locked(page, &rwc);
 	else
 		rmap_walk(page, &rwc);
+}
+
+//shengkai: add ealy writeback support
+// unset writeback page, remaining mapping and add swap entry
+static bool try_to_unset_one(struct page *page, struct vm_area_struct *vma,
+		     unsigned long address, void *arg)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	struct page_vma_mapped_walk pvmw = {
+		.page = page,
+		.vma = vma,
+		.address = address,
+	};
+	pte_t pteval, swp_pte;
+	struct page *subpage;
+	bool ret = true;
+	swp_entry_t swp_entry, writeback_entry;
+	struct mmu_notifier_range range;
+
+	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, vma, vma->vm_mm,
+				address,
+				min(vma->vm_end, address + page_size(page)));
+	mmu_notifier_invalidate_range_start(&range);
+
+	while (page_vma_mapped_walk(&pvmw)) {
+		/*
+		 * If the page is mlock()d, we cannot swap it out.
+		 * If it's recently referenced (perhaps page_referenced
+		 * skipped over this mm) then we should reactivate it.
+		 */
+		if (vma->vm_flags & VM_LOCKED) {
+			/* PTE-mapped THP are never mlocked */
+			if (!PageTransCompound(page)) {
+				mlock_vma_page(page);
+			}
+			ret = false;
+			page_vma_mapped_walk_done(&pvmw);
+			break;
+		}
+
+		/* Unexpected PMD-mapped THP? */
+		VM_BUG_ON_PAGE(!pvmw.pte, page);
+
+		subpage = page - page_to_pfn(page) + pte_pfn(*pvmw.pte);
+		address = pvmw.address;
+
+		/* Nuke the page table entry. */
+		flush_cache_page(vma, address, pte_pfn(*pvmw.pte));
+		if (should_defer_flush(mm, TTU_BATCH_FLUSH)) {
+			/*
+			 * We clear the PTE but do not flush so potentially
+			 * a remote CPU could still be writing to the page.
+			 * If the entry was previously clean then the
+			 * architecture must guarantee that a clear->dirty
+			 * transition on a cached TLB entry is written through
+			 * and traps if the PTE is unmapped.
+			 */
+			pteval = ptep_get_and_clear(mm, address, pvmw.pte);
+			set_tlb_ubc_flush_pending(mm, pte_dirty(pteval));
+		} else {
+			pteval = ptep_clear_flush(vma, address, pvmw.pte);
+		}
+
+		/* Move the dirty bit to the page. Now the pte is gone. */
+		if (pte_dirty(pteval))
+			set_page_dirty(page);
+
+		if (!PageAnon(page) || !PageSwapBacked(page)) {
+			set_pte_at(mm, address, pvmw.pte, pteval);
+			ret = false;
+			page_vma_mapped_walk_done(&pvmw);
+			break;
+		}
+		
+		swp_entry.val = page_private(subpage);
+		if (swap_duplicate(swp_entry) < 0) {
+			set_pte_at(mm, address, pvmw.pte, pteval);
+			ret = false;
+			page_vma_mapped_walk_done(&pvmw);
+			break;
+		}
+
+		if (list_empty(&mm->mmlist)) {
+			spin_lock(&mmlist_lock);
+			if (list_empty(&mm->mmlist))
+				list_add(&mm->mmlist, &init_mm.mmlist);
+			spin_unlock(&mmlist_lock);
+		}
+		inc_mm_counter(mm, MM_SWAPENTS);
+		writeback_entry = make_writeback_entry(subpage);
+		swp_pte = swp_entry_to_pte(writeback_entry);
+		if (pte_soft_dirty(pteval))
+			swp_pte = pte_swp_mksoft_dirty(swp_pte);
+		if (pte_uffd_wp(pteval))
+			swp_pte = pte_swp_mkuffd_wp(swp_pte);
+		set_pte_at(mm, address, pvmw.pte, swp_pte);
+		mmu_notifier_invalidate_range(mm, address,
+							address + PAGE_SIZE);
+		
+		/* remove_rmap */
+		lock_page_memcg(subpage);
+		atomic_add_negative(-1, &subpage->_mapcount);
+		unlock_page_memcg(subpage);
+	}
+
+	mmu_notifier_invalidate_range_end(&range);
+	return ret;
+}
+
+
+bool try_to_unset(struct page *page)
+{
+	struct rmap_walk_control rwc = {
+		.rmap_one = try_to_unset_one,
+		.arg = NULL,
+		.done = page_mapcount_is_zero,
+		.anon_lock = page_lock_anon_vma_read,
+	};
+	int cnt = atomic_read(&page->_mapcount);
+	bool ret;
+
+	rmap_walk(page, &rwc);
+	ret = !page_mapcount(page) ? true : false;
+
+	atomic_set(&page->_mapcount, cnt);
+	return ret;
 }
 
 /*

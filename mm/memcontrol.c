@@ -73,6 +73,8 @@
 
 // include utils for fastswap's offloaded reclamation
 #include "linux/swap_stats.h"
+//shengkai: add early writeback support, each line contain kswapsched?
+#include <linux/kswapsched.h>
 
 struct cgroup_subsys memory_cgrp_subsys __read_mostly;
 EXPORT_SYMBOL(memory_cgrp_subsys);
@@ -3512,8 +3514,11 @@ static int mem_cgroup_resize_max(struct mem_cgroup *memcg,
 		ret = page_counter_set_max(counter, max);
 		// YIFAN: a hack to use Fastswap's offloading in cgroup v1.
 		// adjust memcg->high as well to kick off offloaded reclaim
-		if (!memsw && fs_enabled)
+		if (!memsw && fs_enabled){
 			page_counter_set_high(counter, fs_high);
+			//set writeback_high of memcg TODO num_of_cores * 8(max window)?
+			memcg->writeback_high = max - fs_wbroom;
+		}
 		mutex_unlock(&memcg_max_mutex);
 
 		if (!ret)
@@ -5308,6 +5313,9 @@ static void __mem_cgroup_free(struct mem_cgroup *memcg)
 	for_each_node(node)
 		free_mem_cgroup_per_node_info(memcg, node);
 	free_percpu(memcg->vmstats_percpu);
+
+	kswapsched_destroy(memcg);
+	
 	kfree(memcg);
 }
 
@@ -5370,6 +5378,10 @@ static struct mem_cgroup *mem_cgroup_alloc(void)
 	vmpressure_init(&memcg->vmpressure);
 	INIT_LIST_HEAD(&memcg->event_list);
 	spin_lock_init(&memcg->event_list_lock);
+
+	memcg->kswapsched = NULL;
+	atomic_long_set(&memcg->clean_anon, 0);
+
 	memcg->socket_pressure = jiffies;
 #ifdef CONFIG_MEMCG_KMEM
 	memcg->kmemcg_id = -1;
@@ -6594,6 +6606,60 @@ static ssize_t memory_oom_group_write(struct kernfs_open_file *of,
 	return nbytes;
 }
 
+static int memory_kswapsched_show(struct seq_file *m, void *v)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
+	if (memcg->kswapsched) {
+		seq_printf(m, "[enabled] disabled\n");
+	} else {
+		seq_printf(m, "enabled [disabled]\n");
+	}
+	return 0;
+}
+
+static ssize_t memory_kswapsched_write(struct kernfs_open_file *of,
+				char *buf, size_t nbytes, loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	ssize_t ret = nbytes;
+
+	buf = strstrip(buf);
+	if (!memcmp("enabled", buf,
+		    min(sizeof("enabled")-1, nbytes))) {
+		int err = kswapsched_init(memcg);
+		if (err < 0)
+			ret = err;
+	} else if (!memcmp("disabled", buf,
+            min(sizeof("disabled") - 1, nbytes))) {
+		kswapsched_destroy(memcg);
+	} else 
+		ret = -EINVAL;
+
+	return ret;
+}
+
+static int memory_writeback_high_show(struct seq_file *m, void *v)
+{
+	return seq_puts_memcg_tunable(m,
+		READ_ONCE(mem_cgroup_from_seq(m)->writeback_high));
+}
+
+static ssize_t memory_writeback_high_write(struct kernfs_open_file *of,
+				 char *buf, size_t nbytes, loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	unsigned long high;
+	int err;
+
+	buf = strstrip(buf);
+	err = page_counter_memparse(buf, "max", &high);
+	if (err)
+		return err;
+
+	WRITE_ONCE(memcg->writeback_high, high);
+	return nbytes;
+}
+
 static struct cftype memory_files[] = {
 	{
 		.name = "current",
@@ -6639,6 +6705,19 @@ static struct cftype memory_files[] = {
 	{
 		.name = "stat",
 		.seq_show = memory_stat_show,
+	},
+	{
+		.name = "kswapsched",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = memory_kswapsched_show,
+		.write = memory_kswapsched_write,
+	},
+	{
+		.name = "writeback_high",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = memory_writeback_high_show,
+		.write = memory_writeback_high_write,
+		
 	},
 #ifdef CONFIG_NUMA
 	{

@@ -193,6 +193,8 @@ int page_referenced(struct page *, int is_locked,
 
 void try_to_migrate(struct page *page, enum ttu_flags flags);
 void try_to_unmap(struct page *, enum ttu_flags flags);
+//shengkai: add ealy writeback support
+bool try_to_unset(struct page *);
 
 int make_device_exclusive_range(struct mm_struct *mm, unsigned long start,
 				unsigned long end, struct page **pages,

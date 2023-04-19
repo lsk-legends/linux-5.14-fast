@@ -134,10 +134,12 @@ void report_adc_pf_breakdown(uint64_t *buf)
 
 
 #include <linux/debugfs.h>
-
+#define MAX_PREFETCH 8
+#define PREFETCH_TIMES 100
 bool fs_enabled;
 bool fs_hardlimit;
 unsigned fs_headroom;
+unsigned fs_wbroom;
 unsigned fs_nr_cores;
 unsigned fs_cores[NR_CPUS];
 int fastswap_init(struct dentry *root)
@@ -146,6 +148,8 @@ int fastswap_init(struct dentry *root)
 	fs_enabled = true;
 	fs_hardlimit = true;
 	fs_headroom = 2048;
+	printk("[debug] : %d cores online!",num_online_cpus());
+	fs_wbroom = num_online_cpus() * MAX_PREFETCH * PREFETCH_TIMES;
 	fs_nr_cores = 1;
 	for (i = 0; i < 15; i++) {
 		fs_cores[i] = 31 - i;

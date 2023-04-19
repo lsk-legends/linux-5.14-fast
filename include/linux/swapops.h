@@ -106,6 +106,27 @@ static inline void *swp_to_radix_entry(swp_entry_t entry)
 	return xa_mk_value(entry.val);
 }
 
+//shengkai: writeback_page api
+static inline swp_entry_t make_writeback_entry(struct page *page)
+{
+	return swp_entry(SWP_WRITEBACK, page_to_pfn(page));
+}
+
+static inline bool is_writeback_entry(swp_entry_t entry)
+{
+	return unlikely(swp_type(entry) == SWP_WRITEBACK);
+}
+
+static inline unsigned long writeback_entry_to_pfn(swp_entry_t entry)
+{
+	return swp_offset(entry);
+}
+
+static inline struct page *writeback_entry_to_page(swp_entry_t entry)
+{
+	return pfn_to_page(swp_offset(entry));
+}
+
 #if IS_ENABLED(CONFIG_DEVICE_PRIVATE)
 static inline swp_entry_t make_readable_device_private_entry(pgoff_t offset)
 {

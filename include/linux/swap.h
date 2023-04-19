@@ -70,6 +70,11 @@ static inline int current_is_kswapd(void)
  * When a page is mapped by the device for exclusive access we set the CPU page
  * table entries to special SWP_DEVICE_EXCLUSIVE_* entries.
  */
+
+//shengkai: add writeback_num
+#define SWP_WRITEBACK_NUM 1
+#define SWP_WRITEBACK	MAX_SWAPFILES+SWP_HWPOISON_NUM+SWP_MIGRATION_NUM+SWP_DEVICE_NUM
+
 #ifdef CONFIG_DEVICE_PRIVATE
 #define SWP_DEVICE_NUM 4
 #define SWP_DEVICE_WRITE (MAX_SWAPFILES+SWP_HWPOISON_NUM+SWP_MIGRATION_NUM)
@@ -101,9 +106,13 @@ static inline int current_is_kswapd(void)
 #define SWP_HWPOISON_NUM 0
 #endif
 
+//shengkai: add difference of writeback_num
+// #define MAX_SWAPFILES \
+// 	((1 << MAX_SWAPFILES_SHIFT) - SWP_DEVICE_NUM - \
+// 	SWP_MIGRATION_NUM - SWP_HWPOISON_NUM)
 #define MAX_SWAPFILES \
 	((1 << MAX_SWAPFILES_SHIFT) - SWP_DEVICE_NUM - \
-	SWP_MIGRATION_NUM - SWP_HWPOISON_NUM)
+	SWP_MIGRATION_NUM - SWP_HWPOISON_NUM - SWP_WRITEBACK_NUM)
 
 /*
  * Magic header for a swap area. The first part of the union is
@@ -185,6 +194,8 @@ enum {
 	SWP_PAGE_DISCARD = (1 << 10),	/* freed swap page-cluster discards */
 	SWP_STABLE_WRITES = (1 << 11),	/* no overwrite PG_writeback pages */
 	SWP_SYNCHRONOUS_IO = (1 << 12),	/* synchronous IO is efficient */
+	//shengkai: add writeback_num
+	SWP_VALID	= (1 << 13),	/* swap is valid to be operated on? */
 					/* add others here before... */
 	SWP_SCANNING	= (1 << 14),	/* refcount in scan_swap_map */
 };
@@ -530,6 +541,9 @@ extern struct swap_info_struct *page_swap_info(struct page *);
 extern struct swap_info_struct *swp_swap_info(swp_entry_t entry);
 extern bool reuse_swap_page(struct page *, int *);
 extern int try_to_free_swap(struct page *);
+//shengkai: func for writeback_page
+extern bool reuse_writeback_page(struct page *);
+extern int try_to_free_swapclean(struct page *);
 struct backing_dev_info;
 extern int init_swap_address_space(unsigned int type, unsigned long nr_pages);
 extern void exit_swap_address_space(unsigned int type);
@@ -738,6 +752,12 @@ static inline int swp_swapcount(swp_entry_t entry)
 	(page_trans_huge_mapcount(page, total_map_swapcount) == 1)
 
 static inline int try_to_free_swap(struct page *page)
+{
+	return 0;
+}
+
+//shengkai: add func for writeback_page
+static inline int try_to_free_swapclean(struct page *page)
 {
 	return 0;
 }

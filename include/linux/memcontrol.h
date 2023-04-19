@@ -336,6 +336,13 @@ struct mem_cgroup {
 	atomic_t		moving_account;
 	struct task_struct	*move_lock_task;
 
+	//shengkai: member for kswapsched
+	/* kthread for swap & scheduling */
+	struct task_struct *kswapsched;
+
+	unsigned long writeback_high;
+	atomic_long_t clean_anon;
+
 	struct memcg_vmstats_percpu __percpu *vmstats_percpu;
 
 #ifdef CONFIG_CGROUP_WRITEBACK

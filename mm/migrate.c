@@ -426,6 +426,11 @@ int migrate_page_move_mapping(struct address_space *mapping,
 			SetPageSwapCache(newpage);
 			set_page_private(newpage, page_private(page));
 		}
+		//shengkai: add ealy writeback support
+		if (PageSwapClean(page)) {
+			SetPageSwapClean(newpage);
+			set_page_private(newpage, page_private(page));
+		}
 	} else {
 		VM_BUG_ON_PAGE(PageSwapCache(page), page);
 	}
@@ -584,6 +589,9 @@ void migrate_page_states(struct page *newpage, struct page *page)
 	 */
 	if (PageSwapCache(page))
 		ClearPageSwapCache(page);
+	//shengkai: add ealy writeback support
+	if (PageSwapClean(page))
+		ClearPageSwapClean(page);
 	ClearPagePrivate(page);
 
 	/* page->private contains hugetlb specific flags */
