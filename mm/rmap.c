@@ -1835,7 +1835,7 @@ bool try_to_unset(struct page *page)
 	struct rmap_walk_control rwc = {
 		.rmap_one = try_to_unset_one,
 		.arg = NULL,
-		.done = page_mapcount_is_zero,
+		.done = page_not_mapped,
 		.anon_lock = page_lock_anon_vma_read,
 	};
 	int cnt = atomic_read(&page->_mapcount);
