@@ -523,6 +523,26 @@ struct task_struct *kthread_create_on_cpu(int (*threadfn)(void *data),
 	to_kthread(p)->cpu = cpu;
 	return p;
 }
+//shengkai: add early writeback_page func
+struct task_struct *__kthread_create_on_cpu(int (*threadfn)(void *data),
+					  void *data, unsigned int cpu,
+					  const char namefmt[], ...)
+{
+	struct task_struct *p;
+	va_list args;
+
+	va_start(args, namefmt);
+	p = __kthread_create_on_node(threadfn, data, cpu_to_node(cpu), namefmt,
+					args);
+	va_end(args);
+
+	if (IS_ERR(p))
+		return p;
+	kthread_bind(p, cpu);
+	/* CPU hotplug need to bind once again when unparking the thread. */
+	to_kthread(p)->cpu = cpu;
+	return p;
+}
 
 void kthread_set_per_cpu(struct task_struct *k, int cpu)
 {

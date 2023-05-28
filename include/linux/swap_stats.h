@@ -84,6 +84,8 @@ enum adc_time_stat_type {
 	ADC_TLB_FLUSH_LAT,
 	ADC_FS_RECLAIM_CNT,
 	ADC_FS_RECLAIM_DUR,
+	ADC_FS_RECLAIM_CLEAN,
+	ADC_FS_RECLAIM_DIRTY,
 	NUM_ADC_TIME_STAT_TYPE
 };
 
@@ -95,6 +97,20 @@ static inline void accum_adc_time_stat(enum adc_time_stat_type type, uint64_t va
 	struct adc_time_stat *ts = &adc_time_stats[type];
 	atomic64_add(val, &ts->accum_val);
 	atomic_inc(&ts->cnt);
+}
+
+static inline void accum_adc_stat(enum adc_time_stat_type type)
+{
+	struct adc_time_stat *ts = &adc_time_stats[type];
+	// atomic64_add(val, &ts->accum_val);
+	atomic_inc(&ts->cnt);
+}
+
+static inline void accum_time_stat(enum adc_time_stat_type type, uint64_t val)
+{
+	struct adc_time_stat *ts = &adc_time_stats[type];
+	atomic64_add(val, &ts->accum_val);
+	// atomic_inc(&ts->cnt);
 }
 
 static inline void accum_multi_adc_time_stat(enum adc_time_stat_type type,

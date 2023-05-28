@@ -342,6 +342,8 @@ struct mem_cgroup {
 
 	unsigned long writeback_high;
 	atomic_long_t clean_anon;
+	bool kswapsched_force_reclaim;
+	bool low_or_high;
 
 	struct memcg_vmstats_percpu __percpu *vmstats_percpu;
 

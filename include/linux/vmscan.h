@@ -121,4 +121,5 @@ extern unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 		enum lru_list lru);
 extern unsigned int move_pages_to_lru(struct lruvec *lruvec,
 						     struct list_head *list);
+extern unsigned long lruvec_lru_size(struct lruvec *lruvec, enum lru_list lru, int zone_idx);
 #endif /* _LINUX_VMSCAN_H */

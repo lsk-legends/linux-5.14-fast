@@ -491,7 +491,7 @@ extern struct page *swapin_readahead(swp_entry_t entry, gfp_t flag,
 extern struct page *swapin_readahead_profiling(swp_entry_t entry, gfp_t flag,
 					       struct vm_fault *vmf,
 					       int *adc_pf_bits,
-					       uint64_t pf_breakdown[]);
+					       uint64_t pf_breakdown[], int* ret_cpu);
 // shengkai :
 extern vm_fault_t swapin_bypass_swapcache(struct page **pagep,
 							struct vm_fault *vmf,
@@ -637,7 +637,7 @@ static inline struct page *swap_cluster_readahead(swp_entry_t entry,
 static inline struct page *
 swap_cluster_readahead_profiling(swp_entry_t entry, gfp_t gfp_mask,
 				 struct vm_fault *vmf, int *adc_pf_bits,
-				 uint64_t pf_breakdown[])
+				 uint64_t pf_breakdown[], int* ret_cpu)
 {
 	return NULL;
 }

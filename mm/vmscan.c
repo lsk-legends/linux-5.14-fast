@@ -65,6 +65,8 @@
 #include <linux/swap_stats.h>
 #include <linux/frontswap.h> /* for frontswap_{store_on_core|poll_store}() */
 
+#include <linux/vmscan.h>
+
 // struct scan_control {
 // 	/* How many pages shrink_list() should reclaim */
 // 	unsigned long nr_to_reclaim;
@@ -543,7 +545,7 @@ unsigned long zone_reclaimable_pages(struct zone *zone)
  * @lru: lru to use
  * @zone_idx: zones to consider (use MAX_NR_ZONES for the whole LRU list)
  */
-static unsigned long lruvec_lru_size(struct lruvec *lruvec, enum lru_list lru,
+unsigned long lruvec_lru_size(struct lruvec *lruvec, enum lru_list lru,
 				     int zone_idx)
 {
 	unsigned long size = 0;
@@ -1071,7 +1073,7 @@ profiling:
 	return ret;
 }
 
-static inline pageout_t pageout(struct page *page, struct address_space *mapping)
+inline pageout_t pageout(struct page *page, struct address_space *mapping)
 {
 	return pageout_profiling(page, mapping, HMT_INV_CORE, NULL);
 }
@@ -1221,7 +1223,7 @@ void putback_lru_page(struct page *page)
 // 	PAGEREF_ACTIVATE,
 // };
 
-static enum page_references page_check_references(struct page *page,
+enum page_references page_check_references(struct page *page,
 						  struct scan_control *sc)
 {
 	int referenced_ptes, referenced_page;
@@ -1449,7 +1451,8 @@ batched_pageout(struct list_head *page_list, struct list_head *clean_pages,
 	// [Hermit]
 	uint64_t pf_ts;
 	int core = smp_processor_id();
-
+	int reclaim_clean = 0;
+	int reclaim_dirty = 0;
 	//batched flush tlb
 	/*
 	 * Page is dirty. Flush the TLB if a writable entry
@@ -1459,11 +1462,11 @@ batched_pageout(struct list_head *page_list, struct list_head *clean_pages,
 	if (!list_empty(page_list)) {
 		pf_ts = get_cycles_start();
 		adc_pf_breakdown_stt(pf_breakdown, ADC_TLB_FLUSH_DIRTY, pf_ts);
-		accum_adc_time_stat(ADC_TLB_FLUSH_DIR, -pf_ts);
+		accum_time_stat(ADC_TLB_FLUSH_DIR, -pf_ts);
 		try_to_unmap_flush_dirty();
 		pf_ts = get_cycles_end();
 		adc_pf_breakdown_end(pf_breakdown, ADC_TLB_FLUSH_DIRTY, pf_ts);
-		accum_adc_time_stat(ADC_TLB_FLUSH_DIR, pf_ts);
+		accum_time_stat(ADC_TLB_FLUSH_DIR, pf_ts);
 	}
 
 	while (!list_empty(page_list)) {
@@ -1474,7 +1477,7 @@ batched_pageout(struct list_head *page_list, struct list_head *clean_pages,
 		page = lru_to_page(page_list);
 		list_del(&page->lru);
 		if (!trylock_page(page)) {
-			pr_err("YIFAN: %s:%d", __func__, __LINE__);
+			//pr_err("YIFAN: %s:%d", __func__, __LINE__);
 			goto keep;
 		}
 
@@ -1482,13 +1485,13 @@ batched_pageout(struct list_head *page_list, struct list_head *clean_pages,
 		nr_pages = compound_nr(page);
 
 		if (page_mapped(page)) {
-			pr_err("YIFAN: %s:%d", __func__, __LINE__);
+			//pr_err("YIFAN: %s:%d", __func__, __LINE__);
 			goto keep_locked;
 		}
 
 		if (!PageAnon(page) || !PageSwapBacked(page)) {
 			// shengkai: need to add
-			pr_err("YIFAN: %s:%d", __func__, __LINE__);
+			//pr_err("YIFAN: %s:%d", __func__, __LINE__);
 			goto keep_locked;
 		}
 		// shengkai : the main part of batched pageout
@@ -1513,17 +1516,17 @@ batched_pageout(struct list_head *page_list, struct list_head *clean_pages,
 
 			mapping = page_mapping(page);
 			if (!mapping) {
-				pr_err("YIFAN: %s:%d", __func__, __LINE__);
+				//pr_err("YIFAN: %s:%d", __func__, __LINE__);
 				goto keep_locked;
 			}
 
 			switch (pageout_profiling(page, mapping, core,
 						  pf_breakdown)) {
 			case PAGE_KEEP:
-				pr_err("YIFAN: %s:%d", __func__, __LINE__);
+				//pr_err("YIFAN: %s:%d", __func__, __LINE__);
 				goto keep_locked;
 			case PAGE_ACTIVATE:
-				pr_err("YIFAN: %s:%d", __func__, __LINE__);
+				//pr_err("YIFAN: %s:%d", __func__, __LINE__);
 				goto activate_locked;
 			case PAGE_SUCCESS:
 				stat->nr_pageout += thp_nr_pages(page);
@@ -1579,29 +1582,35 @@ keep:
 	}
 	pf_ts = get_cycles_end();
 	adc_pf_breakdown_stt(pf_breakdown, ADC_RLS_PG_RM_MAP, pf_ts);
-	nr_reclaimed += post_pageout_rls_pages(clean_pages, free_pages,
+	reclaim_clean = post_pageout_rls_pages(clean_pages, free_pages,
 						      ret_pages, pgdat, sc, stat,
 							  pf_breakdown);
-	pf_ts = get_cycles_end();
+	nr_reclaimed += reclaim_clean;
 	adc_pf_breakdown_end(pf_breakdown, ADC_RLS_PG_RM_MAP, pf_ts);
+	accum_time_stat(ADC_FS_RECLAIM_CLEAN,reclaim_clean);
 	if (list_empty(&under_write_pages)) {// not empty means error
 		goto done;
 	}
 
+	pf_ts = get_cycles_end();
 	if (frontswap_poll_store(core)) { // YIFAN: polling failed
 		list_splice_tail(&under_write_pages, ret_pages);
-
+		accum_time_stat(ADC_RDMA_WRITE_LAT,
+				    get_cycles_end() - pf_ts);
 		goto done;
 	}
+	accum_time_stat(ADC_RDMA_WRITE_LAT,
+				    get_cycles_end() - pf_ts);
 
 	pf_ts = get_cycles_end();
 	adc_pf_breakdown_stt(pf_breakdown, ADC_RLS_PG_RM_MAP, pf_ts);
-	nr_reclaimed +=
-		post_pageout_rls_pages(&under_write_pages, free_pages,
+	reclaim_dirty = post_pageout_rls_pages(&under_write_pages, free_pages,
 					      ret_pages, pgdat, sc, stat,
 					      pf_breakdown);
+	nr_reclaimed += reclaim_dirty;
 	pf_ts = get_cycles_end();
 	adc_pf_breakdown_end(pf_breakdown, ADC_RLS_PG_RM_MAP, pf_ts);
+	accum_time_stat(ADC_FS_RECLAIM_DIRTY,reclaim_dirty);
 
 done:
 	return nr_reclaimed;
@@ -1618,6 +1627,9 @@ shrink_page_list_profiling(struct list_head *page_list,
 			   struct reclaim_stat *stat, bool ignore_references,
 			   int *adc_pf_bits, uint64_t pf_breakdown[])
 {
+	//shengkai: profiling!
+	accum_adc_stat(ADC_TLB_FLUSH_DIR);
+
 	LIST_HEAD(ret_pages);
 	LIST_HEAD(free_pages);
 	//shengkai
@@ -1891,6 +1903,8 @@ shrink_page_list_profiling(struct list_head *page_list,
 		if (PageSwapClean(page)) {
 			ClearPageSwapClean(page);
 			atomic_long_dec(&(page_memcg(page)->clean_anon));
+			//printk("[debug] : clean page is dirty? %d",PageDirty(page));
+			goto ewb_page;
 		}
 
 		if (PageDirty(page)) {
@@ -1944,7 +1958,7 @@ shrink_page_list_profiling(struct list_head *page_list,
 			pf_ts = get_cycles_end() - pf_ts;
 			adc_pf_breakdown_end(pf_breakdown, ADC_TLB_FLUSH_DIRTY,
 					     pf_ts);
-			accum_adc_time_stat(ADC_TLB_FLUSH_DIR, pf_ts);
+			accum_time_stat(ADC_TLB_FLUSH_DIR, pf_ts);
 			switch (pageout_profiling(page, mapping, HMT_INV_CORE,
 						  pf_breakdown)) {
 			case PAGE_KEEP:
@@ -1973,7 +1987,7 @@ shrink_page_list_profiling(struct list_head *page_list,
 				; /* try to free the page below */
 			}
 		}
-
+ewb_page:
 		//shengkai :
 		//printk("[debug] : page 0x%lx add to clean list");
 		unlock_page(page);
@@ -2290,7 +2304,7 @@ static __always_inline void update_lru_sizes(struct lruvec *lruvec,
  *
  * returns how many pages were moved onto *@dst.
  */
-static unsigned long isolate_lru_pages(unsigned long nr_to_scan,
+unsigned long isolate_lru_pages(unsigned long nr_to_scan,
 		struct lruvec *lruvec, struct list_head *dst,
 		unsigned long *nr_scanned, struct scan_control *sc,
 		enum lru_list lru)
@@ -2474,7 +2488,7 @@ static int too_many_isolated(struct pglist_data *pgdat, int file,
  *
  * Returns the number of pages moved to the given lruvec.
  */
-static unsigned int move_pages_to_lru(struct lruvec *lruvec,
+unsigned int move_pages_to_lru(struct lruvec *lruvec,
 				      struct list_head *list)
 {
 	int nr_pages, nr_moved = 0;
@@ -4053,6 +4067,10 @@ unsigned long try_to_free_mem_cgroup_pages_profiling(
 	struct mem_cgroup *memcg, unsigned long nr_pages, gfp_t gfp_mask,
 	bool may_swap, int *adc_pf_bits, uint64_t pf_breakdown[])
 {
+	//shengkai: profiling!
+	accum_adc_stat(ADC_FS_RECLAIM_CLEAN);
+	accum_adc_stat(ADC_FS_RECLAIM_DIRTY);
+	
 	unsigned long nr_reclaimed;
 	unsigned int noreclaim_flag;
 	struct scan_control sc = {

@@ -12,6 +12,11 @@ struct task_struct *kthread_create_on_node(int (*threadfn)(void *data),
 					   void *data,
 					   int node,
 					   const char namefmt[], ...);
+//shengkai: early writeback_page
+struct task_struct *__kthread_create_on_cpu(int (*threadfn)(void *data),
+					  void *data,
+					  unsigned int cpu,
+					  const char namefmt[], ...);
 
 /**
  * kthread_create - create a kthread on the current node

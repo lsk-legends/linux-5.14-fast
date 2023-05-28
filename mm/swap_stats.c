@@ -38,7 +38,8 @@ static const char *adc_time_stat_names[NUM_ADC_TIME_STAT_TYPE] = {
 	"non-swap   duration", "RDMA read  latency ", "RDMA write latency ",
 	"alloc swap slot lat", "alloc swap slot fst",
 	"IB polling  latency", "reverse mapping    ", "unmap flush dirty  ",
-	"unmap flush        ", "fs reclaim cnt     ", "fs reclaim dur     "
+	"unmap flush        ", "fs reclaim cnt     ", "fs reclaim dur     ",
+	"fs reclaim clean   ", "fs reclaim dirty   "
 };
 
 void report_adc_time_stat(void)
@@ -48,13 +49,19 @@ void report_adc_time_stat(void)
 		struct adc_time_stat *ts = &adc_time_stats[type];
 		if ((unsigned)atomic_read(&ts->cnt) == 0) {
 			printk("%s: %dns, #: %d", adc_time_stat_names[type], 0, 0);
-		} else {
+		} else if(type < NUM_ADC_TIME_STAT_TYPE - 2){
 			int64_t dur = (int64_t)atomic64_read(&ts->accum_val) /
 				      (int64_t)atomic_read(&ts->cnt) * 1000 /
 				      RMGRID_CPU_FREQ;
 			printk("%s: %lldns, #: %lld",
 			       adc_time_stat_names[type], dur,
 			       (int64_t)atomic_read(&ts->cnt));
+		}else{
+			int64_t dur = (int64_t)atomic64_read(&ts->accum_val) /
+                                      (int64_t)atomic_read(&ts->cnt);
+                        printk("%s: %lldns, #: %lld",
+                               adc_time_stat_names[type], dur,
+                               (int64_t)atomic_read(&ts->cnt));
 		}
 	}
 }
@@ -135,7 +142,7 @@ void report_adc_pf_breakdown(uint64_t *buf)
 
 #include <linux/debugfs.h>
 #define MAX_PREFETCH 8
-#define PREFETCH_TIMES 100
+#define PREFETCH_TIMES 10
 bool fs_enabled;
 bool fs_hardlimit;
 unsigned fs_headroom;
@@ -149,7 +156,7 @@ int fastswap_init(struct dentry *root)
 	fs_hardlimit = true;
 	fs_headroom = 2048;
 	printk("[debug] : %d cores online!",num_online_cpus());
-	fs_wbroom = num_online_cpus() * MAX_PREFETCH * PREFETCH_TIMES;
+	fs_wbroom = 4096;
 	fs_nr_cores = 1;
 	for (i = 0; i < 15; i++) {
 		fs_cores[i] = 31 - i;

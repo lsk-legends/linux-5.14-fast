@@ -884,7 +884,7 @@ static struct page *swap_vma_readahead_profiling(swp_entry_t fentry,
 						 gfp_t gfp_mask,
 						 struct vm_fault *vmf,
 						 int *adc_pf_bits,
-						 uint64_t pf_breakdown[])
+						 uint64_t pf_breakdown[], int* ret_cpu)
 {
 	struct blk_plug plug;
 	struct vm_area_struct *vma = vmf->vma;
@@ -921,7 +921,9 @@ static struct page *swap_vma_readahead_profiling(swp_entry_t fentry,
 		set_adc_pf_bits(adc_pf_bits, ADC_PF_MAJOR_BIT);
 		adc_profile_counter_inc(ADC_ONDEMAND_SWAPIN);
 		count_memcg_event_mm(vma->vm_mm, ONDEMAND_SWAPIN);
-	}
+		*ret_cpu = cpu;
+	}else
+		goto skip;
 
 	if (ra_info.win == 1)
 		goto skip;
@@ -930,6 +932,8 @@ static struct page *swap_vma_readahead_profiling(swp_entry_t fentry,
 	blk_start_plug(&plug);
 	for (i = 0, pte = ra_info.ptes; i < ra_info.nr_pte;
 	     i++, pte++) {
+		//if (cpu != -1 && frontswap_peek_load(cpu) == 0)
+		//	break;
 		if (i == ra_info.offset)
 			continue;
 		pentry = *pte;
@@ -957,25 +961,26 @@ static struct page *swap_vma_readahead_profiling(swp_entry_t fentry,
 		put_page(page);
 	}
 	blk_finish_plug(&plug);
-	lru_add_drain();
+	//lru_add_drain();
 	adc_pf_breakdown_end(pf_breakdown, ADC_PREFETCH, get_cycles_end());
 skip:
-	if (demand_page_allocated) {
-		adc_pf_breakdown_stt(pf_breakdown, ADC_POLL_LOAD,
-				     get_cycles_start());
-		adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
-		frontswap_poll_load(cpu);
-		adc_pf_breakdown_end(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
-		adc_pf_breakdown_end(pf_breakdown, ADC_POLL_LOAD,
-				     get_cycles_end());
-	}
+	//if (demand_page_allocated) {
+	//	adc_pf_breakdown_stt(pf_breakdown, ADC_POLL_LOAD,
+	//			     get_cycles_start());
+	//	adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
+	//	frontswap_poll_load(cpu);
+	//	adc_pf_breakdown_end(pf_breakdown, ADC_PAGE_IO, get_cycles_end());
+	//	adc_pf_breakdown_end(pf_breakdown, ADC_POLL_LOAD,
+	//			     get_cycles_end());
+	//}
 	return fault_page;
 }
 
 inline static struct page *swap_vma_readahead(swp_entry_t fentry, gfp_t gfp_mask,
 				       struct vm_fault *vmf)
 {
-	return swap_vma_readahead_profiling(fentry, gfp_mask, vmf, NULL, NULL);
+	int cpu;
+	return swap_vma_readahead_profiling(fentry, gfp_mask, vmf, NULL, NULL, &cpu);
 }
 
 /**
@@ -1000,11 +1005,11 @@ struct page *swapin_readahead(swp_entry_t entry, gfp_t gfp_mask,
 
 struct page *swapin_readahead_profiling(swp_entry_t entry, gfp_t gfp_mask,
 					struct vm_fault *vmf, int *adc_pf_bits,
-					uint64_t pf_breakdown[])
+					uint64_t pf_breakdown[], int* cpu)
 {
 	return swap_use_vma_readahead() ?
 			     swap_vma_readahead_profiling(entry, gfp_mask, vmf,
-						    adc_pf_bits, pf_breakdown) :
+						    adc_pf_bits, pf_breakdown, cpu) :
 			     swap_cluster_readahead_profiling(
 			       entry, gfp_mask, vmf, adc_pf_bits, pf_breakdown);
 }
@@ -1034,7 +1039,7 @@ vm_fault_t swapin_bypass_swapcache(struct page **pagep,
 	u64 faddr = vmf->address;
 	u64 vaddr = faddr;
 	pte_t *pte, pentry;
-	bool page_allocated;
+	bool page_allocated = false;
 	gfp_t gfp_mask = GFP_HIGHUSER_MOVABLE;
 	uint64_t pf_ts = 0;
 	int fcpu = -1;
@@ -1047,12 +1052,12 @@ vm_fault_t swapin_bypass_swapcache(struct page **pagep,
 	// need lock or not?
 	//*pagep = __read_swap_cache_async_profiling(entry, GFP_HIGHUSER_MOVABLE, vma, faddr,&page_allocated, adc_pf_bits, pf_breakdown);
 	//page = *pagep;
-	
+
 	*pagep = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, vmf->address);
 	page = *pagep;
 	
 	if (!page) {
-		//printk("[debug] : swapin bypass swapcache alloc fail");
+		printk("[debug] : swapin bypass swapcache alloc fail");
 		goto oom;
 	}
 	
@@ -1085,6 +1090,8 @@ vm_fault_t swapin_bypass_swapcache(struct page **pagep,
 	set_adc_pf_bits(adc_pf_bits, ADC_PF_MAJOR_BIT);
 	adc_profile_counter_inc(ADC_ONDEMAND_SWAPIN);
 
+	//page_allocated = false;
+	//page = NULL;
 	// prefetch with early map pte code
 	swap_ra_info(vmf, ra_info);
 	adc_pf_breakdown_stt(pf_breakdown, ADC_PREFETCH, get_cycles_start());
@@ -1122,7 +1129,8 @@ vm_fault_t swapin_bypass_swapcache(struct page **pagep,
     			//continue;
 		//printk("[debug] : alloced page 0x%lx, vaddr 0x%lx", page,vaddr);
 		if (page_allocated) {
-			frontswap_load_early_map(page, vaddr, vma, pte, pentry);
+			swap_readpage_async(page);
+			//frontswap_load_early_map(page, vaddr, vma, pte, pentry);
 			//swap_readpage(page,true);
 			SetPageReadahead(page);
 			count_vm_event(SWAP_RA);

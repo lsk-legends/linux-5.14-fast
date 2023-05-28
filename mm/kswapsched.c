@@ -18,8 +18,8 @@
 #define WRITEBACK_CLUSTER_MAX 16UL
 
 static unsigned int dedicated_cpu = 30;
-static unsigned int max_reclaim_pages = 2048;
-static unsigned int kswapsched_sleep_microsecs __read_mostly = 5;
+static unsigned int max_reclaim_pages = 3072;
+static unsigned int kswapsched_sleep_microsecs __read_mostly = 0;
 static int kswapsched_sched_nice __read_mostly = 15;
 static unsigned long kswapsched_sleep_expire;
 static DECLARE_WAIT_QUEUE_HEAD(kswapsched_wait);
@@ -350,11 +350,28 @@ static bool kswapsched_should_wakeup(void)
 static void kswapsched_do_sched(struct mem_cgroup *memcg)
 {
 	//unsigned long adc_flag = (1UL << ADC_PROFILE_OFFPATH_BIT);
-
-	if ((page_counter_read(&memcg->memory) > READ_ONCE(memcg->writeback_high))
+	//while (memcg->kswapsched_force_reclaim) {
+	//	memcg->kswapsched_force_reclaim = false;
+		//schedule_work_on(get_fs_core(),&memcg->high_works[hash_fs_core()].high_work);
+	//	try_to_free_mem_cgroup_pages_profiling(memcg,
+	//			SWAP_CLUSTER_MAX, GFP_KERNEL, true, NULL, NULL);
+	//}
+	unsigned long counter = page_counter_read(&memcg->memory);
+	if(memcg->low_or_high)
+		return;
+	else if ((counter >= READ_ONCE(memcg->writeback_high))
 		&& (atomic_long_read(&memcg->clean_anon) < max_reclaim_pages)) {
 		//count_memcg_events(memcg, GCTHREADS_SCHED, 1);
 		writeback_mem_cgroup_pages(memcg);
+		//memcg->kswapsched_force_reclaim = true;
+	}else if(counter > READ_ONCE(memcg->memory.high)){
+		memcg->low_or_high = true;
+		schedule_work_on(get_fs_core(),&memcg->high_works[0].high_work);
+		//schedule_work_on(0,&memcg->high_works[0].high_work);
+		//schedule_work_on(1,&memcg->high_works[1].high_work);
+		//schedule_work_on(2,&memcg->high_works[2].high_work);
+		//schedule_work_on(3,&memcg->high_works[3].high_work);
+		//memcg->kswapsched_force_reclaim = true;
 	}
 }
 
@@ -408,7 +425,7 @@ int kswapsched_init(struct mem_cgroup *memcg)
 		err = PTR_ERR(tsk);
 		goto out;
 	}
-
+	printk("[debug] : create kssd:%s", fname);
 	kswapsched_list_add(tsk);
 	memcg->kswapsched = tsk;
 	wake_up_process(tsk);

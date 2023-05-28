@@ -3514,6 +3514,15 @@ vm_fault_t do_writeback_page(struct vm_fault *vmf)
 
 	writeback_entry = pte_to_swp_entry(vmf->orig_pte);
 	page = writeback_entry_to_page(writeback_entry);
+	
+        if (test_and_clear_page_prefetch(page)) { // Make sure to count only once
+                // Hit on swap cache (only prefetched pages)
+                adc_profile_counter_inc(ADC_HIT_ON_PREFETCH);
+                if (vma->vm_mm)
+                          count_memcg_event_mm(vma->vm_mm,
+                                               HITON_SWAP_CACHE);
+        }
+
 	swp_entry.val = page_private(page);
 	locked = lock_page_or_retry(page, vma->vm_mm, vmf->flags);
 	if (!locked) {
@@ -3912,7 +3921,7 @@ vm_fault_t do_swap_page_profiling(struct vm_fault *vmf, int *adc_pf_bits,
 		}
 	}
 	if (!page) {
-		if (__swap_count(entry) == 1) {
+		if (false && __swap_count(entry) == 1) {
 			/* skip swapcache */
 			vm_fault_t func_ret = 0;
 			func_ret = swapin_bypass_swapcache(
@@ -3929,7 +3938,7 @@ vm_fault_t do_swap_page_profiling(struct vm_fault *vmf, int *adc_pf_bits,
 			page = swapin_readahead_profiling(entry,
 							  GFP_HIGHUSER_MOVABLE,
 							  vmf, adc_pf_bits,
-							  pf_breakdown);
+							  pf_breakdown, &cpu);
 			swapcache = page;
 		}
 

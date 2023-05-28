@@ -2360,6 +2360,8 @@ static unsigned long reclaim_high(struct mem_cgroup *memcg,
 		ADC_FS_RECLAIM_CNT,
 		nr_reclaimed *
 			RMGRID_CPU_FREQ); // a dirty hack to use it as a counter
+	//accum_adc_stat(ADC_FS_RECLAIM_CLEAN);
+	//accum_adc_stat(ADC_FS_RECLAIM_DIRTY);
 	return nr_reclaimed;
 }
 
@@ -2386,12 +2388,16 @@ fastswap_offload:
 		nr_reclaimed =
 			reclaim_high(memcg, MEMCG_CHARGE_BATCH, GFP_KERNEL);
 		adc_profile_counter_add(nr_reclaimed, ADC_FS_RECLAIM);
+		memcg->kswapsched_force_reclaim = true;
 	}
 
 	// keep schedule reclaim work until memory is not scarce any more
-	if (page_counter_read(&memcg->memory) > READ_ONCE(memcg->memory.high))
-		schedule_work_on(get_fs_core(),
-				 &memcg->high_works[id].high_work);
+	if (page_counter_read(&memcg->memory) > READ_ONCE(memcg->writeback_high))
+                schedule_work_on(get_fs_core(),
+                               &memcg->high_works[id].high_work);
+		//goto fastswap_offload;
+	else if(memcg->low_or_high)
+		memcg->low_or_high = false;
 }
 
 /*
@@ -2684,6 +2690,16 @@ retry:
 
 	memcg_memory_event(mem_over_limit, MEMCG_MAX);
 
+	//shengkai : out of limit for some time!
+	//if (mem_over_limit->kswapsched) {
+		if (mem_over_limit->kswapsched_force_reclaim) {
+			mem_over_limit->kswapsched_force_reclaim = false;
+			goto force;
+		}// else {
+		//	mem_over_limit->kswapsched_force_reclaim = false;
+		//}
+	//}
+
 	adc_pf_breakdown_end(pf_breakdown, ADC_CGROUP_ACCOUNT,
 			     get_cycles_end());
 	adc_pf_breakdown_stt(pf_breakdown, ADC_PAGE_RECLAIM,
@@ -2698,6 +2714,8 @@ retry:
 	adc_pf_breakdown_stt(pf_breakdown, ADC_CGROUP_ACCOUNT,
 			     get_cycles_start());
 
+	//accum_adc_stat(ADC_FS_RECLAIM_CLEAN);
+	//accum_adc_stat(ADC_FS_RECLAIM_DIRTY);
 	if (mem_cgroup_margin(mem_over_limit) >= nr_pages)
 		goto retry;
 
@@ -2835,6 +2853,10 @@ fastswap_offload:
 			schedule_work_on(
 				get_fs_core(),
 				&memcg->high_works[hash_fs_core()].high_work);
+			//schedule_work_on(0,&memcg->high_works[0].high_work);
+			//schedule_work_on(1,&memcg->high_works[1].high_work);
+			//schedule_work_on(2,&memcg->high_works[2].high_work);
+			//schedule_work_on(3,&memcg->high_works[3].high_work);
 			break;
 		}
 
@@ -3518,6 +3540,7 @@ static int mem_cgroup_resize_max(struct mem_cgroup *memcg,
 			page_counter_set_high(counter, fs_high);
 			//set writeback_high of memcg TODO num_of_cores * 8(max window)?
 			memcg->writeback_high = max - fs_wbroom;
+			printk("[debug] : resize max %ld, high %ld, writeback_high %ld",max,fs_high,memcg->writeback_high);
 		}
 		mutex_unlock(&memcg_max_mutex);
 
@@ -5054,6 +5077,54 @@ out_kfree:
 
 	return ret;
 }
+static int memory_kswapsched_show(struct seq_file *m, void *v)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
+	if (memcg->kswapsched) {
+		seq_printf(m, "[enabled] disabled\n");
+	} else {
+		seq_printf(m, "enabled [disabled]\n");
+	}
+	return 0;
+}
+
+static ssize_t memory_kswapsched_write(struct kernfs_open_file *of,
+				char *buf, size_t nbytes, loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	ssize_t ret = nbytes;
+
+	buf = strstrip(buf);
+	if (!memcmp("enabled", buf,
+		    min(sizeof("enabled")-1, nbytes))) {
+		printk("[debug] : init kswapsched thread!");
+		int err = kswapsched_init(memcg);
+		if (err < 0)
+			ret = err;
+	} else if (!memcmp("disabled", buf,
+            min(sizeof("disabled") - 1, nbytes))) {
+		kswapsched_destroy(memcg);
+	} else
+		ret = -EINVAL;
+
+	return ret;
+}
+
+static ssize_t memory_writeback_high_write(struct kernfs_open_file *of,
+				 char *buf, size_t nbytes, loff_t off)
+{
+	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
+	unsigned long high;
+	int err;
+
+	buf = strstrip(buf);
+	err = page_counter_memparse(buf, "max", &high);
+	if (err)
+		return err;
+
+	WRITE_ONCE(memcg->writeback_high, high);
+	return nbytes;
+}
 
 static struct cftype mem_cgroup_legacy_files[] = {
 	{
@@ -5181,6 +5252,18 @@ static struct cftype mem_cgroup_legacy_files[] = {
 		.private = MEMFILE_PRIVATE(_TCP, RES_MAX_USAGE),
 		.write = mem_cgroup_reset,
 		.read_u64 = mem_cgroup_read_u64,
+	},
+	{
+		.name = "kswapsched",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = memory_kswapsched_show,
+		.write = memory_kswapsched_write,
+	},
+	{
+		.name = "writeback_high",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.read_u64 = mem_cgroup_read_u64,
+		.write = memory_writeback_high_write,
 	},
 	{ },	/* terminate */
 };
@@ -5381,6 +5464,8 @@ static struct mem_cgroup *mem_cgroup_alloc(void)
 
 	memcg->kswapsched = NULL;
 	atomic_long_set(&memcg->clean_anon, 0);
+	memcg->kswapsched_force_reclaim = false;
+	memcg->low_or_high = false;
 
 	memcg->socket_pressure = jiffies;
 #ifdef CONFIG_MEMCG_KMEM
@@ -6606,58 +6691,10 @@ static ssize_t memory_oom_group_write(struct kernfs_open_file *of,
 	return nbytes;
 }
 
-static int memory_kswapsched_show(struct seq_file *m, void *v)
-{
-	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
-	if (memcg->kswapsched) {
-		seq_printf(m, "[enabled] disabled\n");
-	} else {
-		seq_printf(m, "enabled [disabled]\n");
-	}
-	return 0;
-}
-
-static ssize_t memory_kswapsched_write(struct kernfs_open_file *of,
-				char *buf, size_t nbytes, loff_t off)
-{
-	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
-	ssize_t ret = nbytes;
-
-	buf = strstrip(buf);
-	if (!memcmp("enabled", buf,
-		    min(sizeof("enabled")-1, nbytes))) {
-		int err = kswapsched_init(memcg);
-		if (err < 0)
-			ret = err;
-	} else if (!memcmp("disabled", buf,
-            min(sizeof("disabled") - 1, nbytes))) {
-		kswapsched_destroy(memcg);
-	} else 
-		ret = -EINVAL;
-
-	return ret;
-}
-
 static int memory_writeback_high_show(struct seq_file *m, void *v)
 {
-	return seq_puts_memcg_tunable(m,
-		READ_ONCE(mem_cgroup_from_seq(m)->writeback_high));
-}
-
-static ssize_t memory_writeback_high_write(struct kernfs_open_file *of,
-				 char *buf, size_t nbytes, loff_t off)
-{
-	struct mem_cgroup *memcg = mem_cgroup_from_css(of_css(of));
-	unsigned long high;
-	int err;
-
-	buf = strstrip(buf);
-	err = page_counter_memparse(buf, "max", &high);
-	if (err)
-		return err;
-
-	WRITE_ONCE(memcg->writeback_high, high);
-	return nbytes;
+		return seq_puts_memcg_tunable(m,
+					READ_ONCE(mem_cgroup_from_seq(m)->writeback_high));
 }
 
 static struct cftype memory_files[] = {
